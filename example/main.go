@@ -38,7 +38,7 @@ func main() {
                 }
                 pieces = append(pieces, strings.Join(words, " "))
                 pieces = append(pieces, line_items[1:]...)
-                fmt.Println(strings.Join(pieces, "\t"))
+                log.Println(strings.Join(pieces, "\t"))
             }
             waitgroup.Done()
             <-tokens
