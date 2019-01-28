@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"git.apache.org/thrift.git/lib/go/thrift"
 	iconv "github.com/djimenez/iconv-go"
-	"github.com/lokicui/mlt/interface/gen-go/wenwen_seg"
+	"github.com/lokicui/sego/g"
+	"github.com/lokicui/sego/wenwen_seg"
 	"math/rand"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -16,37 +19,34 @@ type WordInfo struct {
 }
 
 func SegmentQuery(query string, useEntity bool) (words []WordInfo, err error) {
-	addrs := []string{
-		"10.134.104.53:30001",
-		"10.134.104.54:30001",
-		"10.134.104.53:30002",
-		"10.134.104.54:30002",
-		"10.134.45.60:30001",
-		"10.134.45.63:30001",
-		"10.134.45.64:30001",
-		"10.134.92.21:30001",
-		"10.134.100.115:30001",
-		//"10.134.45.59:30001"
+	addrs := strings.Split(*g.SegmentorAddrs, ";")
+	var client *wenwen_seg.SegServiceClient = nil
+	baseidx := rand.Intn(len(addrs))
+	for i := 0; i < len(addrs)*2; i++ {
+		baseidx = (baseidx + i) % len(addrs)
+		addr := addrs[baseidx]
+		timeout := time.Duration(200) //200ms
+		socket, err := thrift.NewTSocketTimeout(addr, timeout*time.Millisecond)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening socket:", addr, err)
+			continue
+		}
+		var transportFactory thrift.TTransportFactory
+		transportFactory = thrift.NewTBufferedTransportFactory(8192)
+		transportFactory = thrift.NewTFramedTransportFactory(transportFactory)
+		protocolFactory := thrift.NewTBinaryProtocolFactoryDefault()
+		transport := transportFactory.GetTransport(socket)
+		if err = transport.Open(); err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening transport:", addr, err)
+			continue
+		}
+		defer transport.Close()
+		client = wenwen_seg.NewSegServiceClientFactory(transport, protocolFactory)
+		break
 	}
-	addr := addrs[rand.Intn(len(addrs))]
-	timeout := time.Duration(50) //50ms
-	socket, err := thrift.NewTSocketTimeout(addr, timeout*time.Millisecond)
-	if err != nil {
-		fmt.Println("Error opening socket:", err)
+	if client == nil {
 		return
 	}
-	var transportFactory thrift.TTransportFactory
-	transportFactory = thrift.NewTBufferedTransportFactory(8192)
-	transportFactory = thrift.NewTFramedTransportFactory(transportFactory)
-	protocolFactory := thrift.NewTBinaryProtocolFactoryDefault()
-	transport := transportFactory.GetTransport(socket)
-	if err = transport.Open(); err != nil {
-		fmt.Println("Error opening socket:", err)
-		return
-	}
-	defer transport.Close()
-	client := wenwen_seg.NewSegServiceClientFactory(transport, protocolFactory)
-
 	for _, q := range splitQuery(query) {
 		wds, err := segment(q, useEntity, client)
 		//try 3 times
@@ -159,28 +159,29 @@ func segment(query string, useEntity bool, client *wenwen_seg.SegServiceClient) 
 		word := WordInfo{}
 		e, ok := entity_map[int16(i)]
 		if ok {
-            start := int(resp.Terms[i].Pos*2)
-            if start > len(resp.QueryGbkSbc) {
-                start = len(resp.QueryGbkSbc)
-            }
-            end := int(resp.Terms[e].Pos*2+resp.Terms[e].Len*2)
-            if end > len(resp.QueryGbkSbc) {
-                end = len(resp.QueryGbkSbc)
-            }
+			start := int(resp.Terms[i].Pos * 2)
+			if start > len(resp.QueryGbkSbc) {
+				start = len(resp.QueryGbkSbc)
+			}
+			end := int(resp.Terms[e].Pos*2 + resp.Terms[e].Len*2)
+			if end > len(resp.QueryGbkSbc) {
+				end = len(resp.QueryGbkSbc)
+			}
 			termstr := resp.QueryGbkSbc[start:end]
 			word.IsEntity = true
 			word.Word, err = iconv.ConvertString(termstr, "gbk", "utf-8")
 			i = int(e)
 		} else {
-			if hasSecond(termid) && i+1 < len(resp.GetTerms()) {
-                start := int(resp.Terms[i].Pos*2)
-                if start > len(resp.QueryGbkSbc) {
-                    start = len(resp.QueryGbkSbc)
-                }
-                end := int(resp.Terms[i+1].Pos*2+resp.Terms[i+1].Len*2)
-                if end > len(resp.QueryGbkSbc) {
-                    end = len(resp.QueryGbkSbc)
-                }
+			if hasSecond(termid) && i+1 < len(terms) {
+				start := int(resp.Terms[i].Pos * 2)
+				if start > len(resp.QueryGbkSbc) {
+					start = len(resp.QueryGbkSbc)
+				}
+				i++
+				end := int(resp.Terms[i].Pos*2 + resp.Terms[i].Len*2)
+				if end > len(resp.QueryGbkSbc) {
+					end = len(resp.QueryGbkSbc)
+				}
 				termstr := resp.QueryGbkSbc[start:end]
 				word.Word, err = iconv.ConvertString(termstr, "gbk", "utf-8")
 				if err != nil {
@@ -189,14 +190,14 @@ func segment(query string, useEntity bool, client *wenwen_seg.SegServiceClient) 
 				word.QueryTermInfo = *term
 				word.IsEntity = false
 			} else {
-                start := int(resp.Terms[i].Pos*2)
-                if start > len(resp.QueryGbkSbc) {
-                    start = len(resp.QueryGbkSbc)
-                }
-                end := int(resp.Terms[i].Pos*2+resp.Terms[i].Len*2)
-                if end > len(resp.QueryGbkSbc) {
-                    end = len(resp.QueryGbkSbc)
-                }
+				start := int(resp.Terms[i].Pos * 2)
+				if start > len(resp.QueryGbkSbc) {
+					start = len(resp.QueryGbkSbc)
+				}
+				end := int(resp.Terms[i].Pos*2 + resp.Terms[i].Len*2)
+				if end > len(resp.QueryGbkSbc) {
+					end = len(resp.QueryGbkSbc)
+				}
 				termstr := resp.QueryGbkSbc[start:end]
 				word.Word, err = iconv.ConvertString(termstr, "gbk", "utf-8")
 				if err != nil {
